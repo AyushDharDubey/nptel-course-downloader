@@ -1,6 +1,7 @@
 import requests
 from tqdm import tqdm
 import os
+import json
 
 def download_video(url, filename):
     """
@@ -37,15 +38,56 @@ def download_video(url, filename):
     except Exception as e:
         print(f"An unexpected error occurred for {filename}: {e}")
 
+def sanitize_filename(name):
+    """
+    Removes characters that are invalid for directory/file names.
+    """
+    return "".join(c for c in name if c.isalnum() or c in (' ', '_', '-')).rstrip()
+
+
 def main():
     """
     Main function to get user input and start the download process.
     """
-    base_url_part = input("Enter the course id: ")
-    base_url_part = f"https://media.dev.nptel.ac.in/content/mp4/{base_url_part[:3]}/{base_url_part[3:6]}/{base_url_part}/MP4/"
+    course_id = input("Enter the course id (e.g., 105107463): ")
+
+    details_api_url = f"https://nptel.ac.in/api/subject-details/{course_id}"
+    print(f"\nFetching course details from {details_api_url}...")
+    course_details = None
+    course_dir = f"course_{course_id}" # Fallback directory name
+
+    try:
+        response = requests.get(details_api_url, timeout=30)
+        response.raise_for_status()
+        course_details = response.json()
+
+        course_data = course_details.get('data', {})
+
+        course_name = course_data.get('title', '').strip()
+        if course_name:
+            course_dir = sanitize_filename(course_name)
+        os.makedirs(course_dir, exist_ok=True)
+        print(f"Created course directory: {course_dir}")
+
+        details_filename = os.path.join(course_dir, f"{course_id}_course_details.json")
+        with open(details_filename, 'w', encoding='utf-8') as f:
+            json.dump(course_details, f, ensure_ascii=False, indent=4)
+        print(f"Successfully saved course details to {details_filename}")
+
+        if course_data and 'syllabus_url' in course_data and course_data['syllabus_url']:
+            syllabus_url = course_data['syllabus_url']
+            syllabus_filename = os.path.join(course_dir, syllabus_url.split('/')[-1])
+            print(f"\nFound syllabus at {syllabus_url}")
+            download_video(syllabus_url, syllabus_filename) # Reusing the download function
+        else:
+            print("Syllabus download URL not found in course details.")
+
+    except requests.exceptions.RequestException as e:
+        print(f"Could not fetch course details: {e}")
+    except json.JSONDecodeError:
+        print("Failed to parse course details from API response.")
     
-    if not base_url_part.endswith('/'):
-        base_url_part += '/'
+    base_url_part = f"https://media.dev.nptel.ac.in/content/mp4/{course_id[:3]}/{course_id[3:6]}/{course_id}/MP4/"
 
     try:
         total_modules = int(input("Enter the total number of modules in the course (e.g., 12): "))
@@ -55,13 +97,11 @@ def main():
 
     for module_number in range(1, total_modules + 1):
         print(f"\n----- Processing Module {module_number} -----")
-        
-        # Calculate lecture range based on the pattern (5 lectures per module)
+
         start_lecture = (module_number - 1) * 5 + 1
         end_lecture = module_number * 5
 
-        # Create a directory for the current module if it doesn't exist
-        output_dir = f"module_{module_number}_videos"
+        output_dir = os.path.join(course_dir, f"module_{module_number}_videos")
         os.makedirs(output_dir, exist_ok=True)
 
         print(f"Starting download for lectures {start_lecture} to {end_lecture}.")
